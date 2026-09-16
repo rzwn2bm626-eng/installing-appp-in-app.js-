@@ -1,7 +1,7 @@
 {
   "name": "fortnite",
   "short_name": "fortnite",
-  "description": "My custom HTML application",
+  "description": "tik",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
