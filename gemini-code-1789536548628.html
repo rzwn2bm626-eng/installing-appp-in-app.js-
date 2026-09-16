@@ -1,0 +1,255 @@
+<script>
+function cleanWebUrl(url) {
+  if (!url) return '';
+  if (url.includes('raw.githubusercontent.com')) {
+    return url.replace('raw.githubusercontent.com', 'raw.githack.com');
+  }
+  return url;
+}
+
+const BASE_CDN_NETWORK = "https://raw.githack.com/school-rgb/Hydra-assets/main/";
+const GAMES_FOLDER_NETWORK = "gmes/";
+const FALLBACK_IMG = "https://img.icons8.com/?size=100&id=gp2EGUQ15At9&format=png&color=999999";
+
+const HIDDEN_GAMES = [
+  "Geometry Dash Lite (REMAKE)",
+  "Plants vs. Zombies 2 Gardenless",
+  "Geometry Dash Lite",
+  "Subway Surfers New Orleans",
+  "Subway Surfers San Francisco",
+  "Cross Yr Oad",
+];
+
+let DATA = { games: [] };
+let activeGameName = '', activeGameUrl = '', activeGameImg = '', activeGameDesc = '';
+let currentGameUrl = '', currentGameCode = '';
+
+function safeArray(arr) { return Array.isArray(arr) ? arr : []; }
+
+function dedupeGames(games) {
+  const seen = new Set();
+  return games.filter(g => {
+    if (!g || !g.url) return false;
+    if (seen.has(g.url)) return false;
+    seen.add(g.url);
+    return true;
+  });
+}
+
+async function loadNetworkGames() {
+  try {
+    const cacheBuster = '?t=' + new Date().getTime();
+    const r = await fetch("https://raw.githubusercontent.com/school-rgb/Hydra-assets/main/gmes.json" + cacheBuster, { cache: 'no-store' });
+    if (!r.ok) { loadFromCacheFallback(); return; }
+    const d = await r.json();
+    let rawArray = safeArray(d);
+        
+    const freshData = dedupeGames(rawArray.map(g => {
+      if (!g || typeof g !== "object") return null;
+      let file = g.file_name || g.link || g.url || g.file || g.path || g.html;
+      let title = g.title || g.name || g.game || "Untitled Game";
+      if (!file) return null;
+      
+      file = String(file).replace(/^\/+/, "");
+      let rawGameUrl = file.startsWith("http") ? file : (BASE_CDN_NETWORK + (file.startsWith(GAMES_FOLDER_NETWORK) ? file : GAMES_FOLDER_NETWORK + file));
+      let thumb = g.thumb || g.image || g.img || g.thumbnail || FALLBACK_IMG;
+      if (thumb !== FALLBACK_IMG && !thumb.startsWith("http")) thumb = BASE_CDN_NETWORK + thumb.replace(/^\/+/, "");
+      
+      return { 
+        name: title,
+        description: g.description || g.desc || "Fruitiger Library Game",
+        img: thumb,
+        url: cleanWebUrl(rawGameUrl)
+      };
+    }).filter(Boolean));
+
+    const filteredData = freshData.filter(game => {
+      const gameTitle = game.name.trim().toLowerCase();
+      return !HIDDEN_GAMES.some(hiddenName => gameTitle === hiddenName.trim().toLowerCase());
+    });
+
+    localStorage.setItem('my_games_cache', JSON.stringify(filteredData));
+    DATA.games = filteredData;
+    renderGames();
+  } catch (e) {
+    loadFromCacheFallback();
+  }
+}
+
+function loadFromCacheFallback() {
+  const cachedData = localStorage.getItem('my_games_cache');
+  if (cachedData) {
+    try {
+      DATA.games = JSON.parse(cachedData).filter(game => {
+        const gameTitle = game.name.trim().toLowerCase();
+        return !HIDDEN_GAMES.some(hiddenName => gameTitle === hiddenName.trim().toLowerCase());
+      });
+    } catch(err) { DATA.games = []; }
+  }
+  renderGames();
+}
+
+function renderGames() {
+  const list = document.getElementById('gameList');
+  list.innerHTML = '';
+
+  DATA.games.forEach(game => {
+    const item = document.createElement('div');
+    item.className = 'list-item remote-item';
+    item.setAttribute('data-name', game.name.toLowerCase());
+    item.onclick = () => openDetailView(game.name, game.url, game.img, game.description);
+    
+    item.innerHTML = `
+      <div class="list-thumb-wrapper">
+        <img class="list-thumb" src="${game.img}" alt="${game.name}" onerror="this.src='${FALLBACK_IMG}'">
+      </div>
+      <div class="list-info">
+        <div class="list-title">${game.name}</div>
+        <div class="list-desc">${game.description}</div>
+      </div>`;
+    list.appendChild(item);
+  });
+}
+
+function filterGames() {
+  const query = document.getElementById('searchInput').value.toLowerCase().trim();
+  document.querySelectorAll('.remote-item').forEach(item => {
+    const name = item.getAttribute('data-name') || '';
+    item.style.display = name.includes(query) ? 'flex' : 'none';
+  });
+}
+
+async function openDetailView(name, url, img, desc) {
+  activeGameName = name;
+  activeGameUrl = cleanWebUrl(url);
+  activeGameImg = img || FALLBACK_IMG;
+  activeGameDesc = desc || 'Fruitiger Library Game';
+
+  document.getElementById('detailTitle').innerText = activeGameName;
+  document.getElementById('detailBanner').style.backgroundImage = `url('${activeGameImg}')`;
+  document.getElementById('detailView').style.display = 'flex';
+
+  currentGameCode = '';
+  try {
+    const response = await fetch(activeGameUrl);
+    if (response.ok) currentGameCode = await response.text();
+  } catch (err) {}
+}
+
+function closeDetailView() { document.getElementById('detailView').style.display = 'none'; }
+
+function launchGameFromDetails() {
+  closeDetailView();
+  currentGameUrl = activeGameUrl;
+  const playerView = document.getElementById('gamePlayerView');
+  playerView.style.display = 'flex';
+  document.getElementById('playerTitle').innerText = activeGameName;
+  const iframe = document.getElementById('gameIframe');
+
+  if (currentGameCode) {
+    const blob = new Blob([currentGameCode], { type: 'text/html' });
+    iframe.src = URL.createObjectURL(blob);
+  } else {
+    iframe.src = activeGameUrl;
+  }
+}
+
+async function installCurrentGame() {
+  if (!activeGameName || !activeGameUrl) return;
+
+  let codeToSend = currentGameCode;
+  if (!codeToSend) {
+    try {
+      const res = await fetch(activeGameUrl);
+      if (res.ok) codeToSend = await res.text();
+    } catch (err) {}
+  }
+
+  // Generate app.js file directly for Chromebook deployment
+  const appJsContent = `
+/**
+ * Installed App Container for Chromebooks
+ * Title: ${JSON.stringify(activeGameName)}
+ * Logo: ${JSON.stringify(activeGameImg)}
+ */
+
+(function launchChromebookApp() {
+  const appTitle = ${JSON.stringify(activeGameName)};
+  const appLogo = ${JSON.stringify(activeGameImg)};
+  const rawUrl = ${JSON.stringify(activeGameUrl)};
+  const embeddedCode = ${JSON.stringify(codeToSend)};
+
+  // Set page icon and title dynamically
+  document.title = appTitle;
+  let favicon = document.querySelector("link[rel*='icon']") || document.createElement('link');
+  favicon.type = 'image/x-icon';
+  favicon.rel = 'shortcut icon';
+  favicon.href = appLogo;
+  document.getElementsByTagName('head')[0].appendChild(favicon);
+
+  // Setup full viewport application overlay
+  document.body.style.margin = "0";
+  document.body.style.padding = "0";
+  document.body.style.overflow = "hidden";
+  document.body.style.backgroundColor = "#000000";
+
+  const iframe = document.createElement('iframe');
+  iframe.style.width = "100vw";
+  iframe.style.height = "100vh";
+  iframe.style.border = "none";
+  iframe.allow = "autoplay; fullscreen; gamepad; encrypted-media";
+
+  document.body.appendChild(iframe);
+
+  if (embeddedCode) {
+    const blob = new Blob([embeddedCode], { type: 'text/html' });
+    iframe.src = URL.createObjectURL(blob);
+  } else {
+    iframe.src = rawUrl;
+  }
+})();
+`;
+
+  // Trigger app.js download directly on the Chromebook
+  const blob = new Blob([appJsContent], { type: 'application/javascript' });
+  const downloadLink = document.createElement('a');
+  downloadLink.href = URL.createObjectURL(blob);
+  downloadLink.download = `${activeGameName.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_app.js`;
+  document.body.appendChild(downloadLink);
+  downloadLink.click();
+  document.body.removeChild(downloadLink);
+}
+
+function openInNewTab() {
+  if (!currentGameUrl) return;
+  if (currentGameCode) {
+    const blob = new Blob([currentGameCode], { type: 'text/html' });
+    window.open(URL.createObjectURL(blob), '_blank');
+  } else {
+    window.open(currentGameUrl, '_blank');
+  }
+}
+
+function returnHome() {
+  document.getElementById('gamePlayerView').style.display = 'none';
+  document.getElementById('detailView').style.display = 'none';
+  document.getElementById('gameIframe').src = '';
+}
+
+function openAddModal() { document.getElementById('addModal').style.display = 'flex'; }
+
+function confirmAddGame() {
+  const name = document.getElementById('inputName').value;
+  const imgUrl = document.getElementById('inputImg').value;
+  const url = cleanWebUrl(document.getElementById('inputUrl').value);
+  const desc = document.getElementById('inputDesc').value || 'Custom Game';
+
+  if (!name || !url) return alert("Please enter both a title and a game URL.");
+
+  DATA.games.push({ name, url, img: imgUrl || FALLBACK_IMG, description: desc });
+  renderGames();
+  document.getElementById('addModal').style.display = 'none';
+}
+
+window.addEventListener('DOMContentLoaded', loadNetworkGames);
+</script>
